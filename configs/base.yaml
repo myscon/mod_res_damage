@@ -1,0 +1,13 @@
+experiment_name: ???
+hydra:
+  run:
+    dir: ${hydra:runtime.cwd}/data/experiments/${hydra.job.config_name}_${experiment_name}_${now:%Y-%m-%d}_${now:%H%M%S}
+seed: 42
+fix_seed: true
+use_wandb: false
+num_workers: 0
+use_final_ckpt: true
+find_unused_parameters: false
+pin_memory: false
+persistent_workers: false
+distributed: false

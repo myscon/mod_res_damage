@@ -1,0 +1,16 @@
+[build-system]
+requires = [
+    "setuptools>=61.0",
+    "setuptools-scm>=8.0",
+    "wheel"
+]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["", "src"]
+
+[tool.setuptools_scm]
+
+[project]
+name = "mod_res_damage"
+version = "0.0.1"
