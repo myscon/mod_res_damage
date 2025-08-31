@@ -6,12 +6,13 @@ import numpy as np
 import rasterio
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from pathlib import Path
 from rasterio.transform import from_bounds
 from torch.utils.data import DataLoader
 
-from mod_res_damage.utils.utils import mutual_information
+from mod_res_damage.utils.utils import mutual_information, compute_loss
 
 
 class Evaluator:
@@ -135,6 +136,79 @@ class Evaluator:
 
         return merged_pred
     
+    @staticmethod
+    def random_inference(model, input, input_size, stride=None, max_batch=None):
+        b, _, _, height, width = input[list(input.keys())[0]].shape
+
+        if stride is None:
+            stride = np.random.randint(input_size // 2, input_size)
+
+        h = int(math.ceil((height + stride) / stride))
+        w = int(math.ceil((width + stride) / stride))
+
+        h_grid = torch.arange(-stride, h + stride, step=stride)
+        w_grid = torch.arange(-stride, w + stride, step=stride)
+
+        num_crops_per_input = len(h_grid) * len(w_grid)
+
+        input_cropped = {}
+        for k, v in input.items():
+            input_crops = []
+            for hi in h_grid:
+                for wj in w_grid:
+                    h_start, w_start = hi.item(), wj.item()
+                    h_end, w_end = h_start + input_size, w_start + input_size
+
+                    h0, h1 = max(h_start, 0), min(h_end, height)
+                    w0, w1 = max(w_start, 0), min(w_end, width)
+                    crop = v[:, :, :, h0:h1, w0:w1]
+
+                    pad_top = 0 if h_start >= 0 else -h_start
+                    pad_left = 0 if w_start >= 0 else -w_start
+                    pad_bottom = max(h_end - height, 0)
+                    pad_right = max(w_end - width, 0)
+                    if pad_top or pad_bottom or pad_left or pad_right:
+                        # NOTE: for  the love of everthing F.pad from function is different from torchvision
+                        crop = F.pad(crop, (pad_left, pad_right, pad_top, pad_bottom))
+                    input_crops.append(crop)
+            input_cropped[k] = torch.cat(input_crops, dim=0)
+
+        pred = []
+        max_batch = max_batch if max_batch is not None else b * num_crops_per_input
+        batch_num = int(math.ceil(b * num_crops_per_input / max_batch))
+        for i in range(batch_num):
+            input_ = {k: v[max_batch * i: min(max_batch * (i + 1), b * num_crops_per_input)]
+                    for k, v in input_cropped.items()}
+            pred_ = model.forward(input_)
+            pred.append(pred_)
+        pred = torch.cat(pred, dim=0)
+        pred = pred.view(num_crops_per_input, b, -1, input_size, input_size).transpose(0, 1)
+
+        merged_pred = torch.zeros((b, pred.shape[2], height, width), device=pred.device)
+        pred_count = torch.zeros((b, height, width), dtype=torch.long, device=pred.device)
+
+        idx = 0
+        for hi in h_grid:
+            for wj in w_grid:
+                h_start, w_start = hi.item(), wj.item()
+                h_end, w_end = h_start + input_size, w_start + input_size
+
+                h0, h1 = max(h_start, 0), min(h_end, height)
+                w0, w1 = max(w_start, 0), min(w_end, width)
+
+                ph0 = h0 - h_start
+                pw0 = w0 - w_start
+                ph1 = input_size - (h_end - h1)
+                pw1 = input_size - (w_end - w1)
+
+                merged_pred[:, :, h0:h1, w0:w1] += pred[:, idx, :, ph0:ph1, pw0:pw1]
+                pred_count[:, h0:h1, w0:w1] += 1
+                idx += 1
+
+        merged_pred = merged_pred / pred_count.unsqueeze(1)
+
+        return merged_pred
+    
 
 class SegEvaluator(Evaluator):
     def __init__(self,
@@ -149,9 +223,12 @@ class SegEvaluator(Evaluator):
             model_dict = torch.load(model_ckpt_path, map_location=self.device, weights_only=False)
             model_name = os.path.basename(model_ckpt_path).split(".")[0]
             if "model" in model_dict:
-                model.module.load_state_dict(model_dict["model"])
-            else:
+                model_dict = model_dict["model"]
+                
+            if self.distributed:
                 model.module.load_state_dict(model_dict)
+            else:
+                model.load_state_dict(model_dict)
 
             self.logger.info(f"Loaded {model_name} for evaluation")
         model.eval()
@@ -167,9 +244,10 @@ class SegEvaluator(Evaluator):
             
         loss = []
         for batch_idx, data in enumerate(self.dataloader):
-            input, target = data["input"], data["target"]
+            input, target, no_data = data["input"], data["target"], data["no_data"]
             input = {k: v.to(self.device) for k, v in input.items()}
             target = target.to(self.device)
+            no_data = no_data.to(self.device)
 
             if self.num_monte_carlo is not None:        
                 output_mc = []
@@ -191,7 +269,7 @@ class SegEvaluator(Evaluator):
             else:
                 logits = self._inference(model, input)
                 probs = self.activation(logits) 
-            loss.append(self.criterion(logits, target))
+            loss.append(compute_loss(self.criterion, logits, target, no_data))
             
             if self.save_probs:
                 self._save_probs(probs, data, model_name)
@@ -231,6 +309,8 @@ class SegEvaluator(Evaluator):
     def _inference(self, model, input):
         if self.inference_mode == "sliding":
             logits = self.sliding_inference(model, input, self.input_size, stride=self.sliding_stride, max_batch=self.inference_batch)
+        elif self.inference_mode == "random":
+            logits = self.random_inference(model, input, self.input_size, stride=self.sliding_stride, max_batch=self.inference_batch)
         elif self.inference_mode == "whole":
             logits = model(input)
         else:

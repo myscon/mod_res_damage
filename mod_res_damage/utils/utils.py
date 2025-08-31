@@ -77,6 +77,15 @@ def get_final_model_ckpt_path(ckpt_dir: str | Path) -> Optional[str]:
     return _find_ckpt(ckpt_dir, "_final.pth")
 
 
+def compute_loss(criterion, logits: torch.Tensor, target: torch.Tensor, no_data: torch.Tensor) -> torch.Tensor:
+    loss = criterion(logits, target)
+    
+    if no_data.numel():
+        valid_count = no_data.sum()
+        loss = (loss * no_data).sum() / valid_count
+    return loss
+
+
 def entropy(prob):
     return -np.sum(prob * np.log(prob + 1e-15), axis=1)
 

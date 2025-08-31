@@ -11,8 +11,8 @@ from torch.optim.lr_scheduler import LRScheduler
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader
 
-from mod_res_damage.utils.utils import RunningAverageMeter      
-      
+from mod_res_damage.utils.utils import RunningAverageMeter, compute_loss
+
       
 class Trainer:
     def __init__(
@@ -27,6 +27,7 @@ class Trainer:
         ckpt_dir: pathlib.Path | str,
         device: torch.device,
         distributed: bool,
+        cudnn_backend: bool,
         precision: str,
         use_wandb: bool,
         ckpt_interval: int,
@@ -45,6 +46,7 @@ class Trainer:
         self.ckpt_dir = ckpt_dir
         self.device = device
         self.distributed = distributed
+        self.cudnn_backend = cudnn_backend
         self.use_wandb = use_wandb
         self.ckpt_interval = ckpt_interval
         self.eval_interval = eval_interval
@@ -65,6 +67,8 @@ class Trainer:
             "fp16",
             "bfp16",
         ], f"Invalid precision {precision}, use 'fp32', 'fp16' or 'bfp16'."
+        
+        torch.backends.cudnn.enabled = self.cudnn_backend
         
         self.enable_mixed_precision = precision != "fp32"
         self.precision = torch.float16 if (precision == "fp16") else torch.bfloat16
@@ -100,9 +104,10 @@ class Trainer:
 
         end_time = time.time()
         for batch_idx, data in enumerate(self.train_loader):
-            input, target = data["input"], data["target"]
+            input, target, no_data = data["input"], data["target"], data["no_data"]
             input = {modality: value.to(self.device) for modality, value in input.items()}
             target = target.to(self.device)
+            no_data = no_data.to(self.device)
 
             self.training_stats["data_time"].update(time.time() - end_time)
 
@@ -110,7 +115,7 @@ class Trainer:
                 "cuda", enabled=self.enable_mixed_precision, dtype=self.precision
             ):
                 logits = self.model(input)
-                loss = self.compute_loss(logits, target)
+                loss = compute_loss(self.criterion, logits, target, no_data)
 
             self.optimizer.zero_grad()
 
@@ -176,21 +181,24 @@ class Trainer:
     def load_model(self, resume_path: str | pathlib.Path) -> None:
         model_dict = torch.load(resume_path, map_location=self.device, weights_only=False)
         if "model" in model_dict:
-            self.model.module.load_state_dict(model_dict["model"])
+            if self.distributed:
+                self.model.module.load_state_dict(model_dict["model"])
+            else:
+                self.model.load_state_dict(model_dict["model"])
             self.optimizer.load_state_dict(model_dict["optimizer"])
             self.lr_scheduler.load_state_dict(model_dict["lr_scheduler"])
             self.scaler.load_state_dict(model_dict["scaler"])
             self.start_epoch = model_dict["epoch"] + 1
         else:
-            self.model.module.load_state_dict(model_dict)
+            if self.distributed:
+                self.model.module.load_state_dict(model_dict)
+            else:
+                self.model.load_state_dict(model_dict)
             self.start_epoch = 0
 
         self.logger.info(
             f"Loaded model from {resume_path}. Resume training from epoch {self.start_epoch}"
         )
-
-    def compute_loss(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        return self.criterion(logits, target)
 
     def save_best_checkpoint(
         self, eval_metrics: dict[float, list[float]], epoch: int

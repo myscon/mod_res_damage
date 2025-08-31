@@ -104,6 +104,7 @@ def main(cfg: DictConfig) -> None:
     train_loader = DataLoader(
         train_dataset,
         batch_size=cfg.train_batch_size,
+        shuffle=shuffle,
         sampler=train_sampler,
         num_workers=cfg.num_workers,
         pin_memory=cfg.pin_memory,
@@ -153,6 +154,7 @@ def main(cfg: DictConfig) -> None:
         ckpt_dir=ckpt_dir,
         device=device,
         distributed=cfg.distributed,
+        cudnn_backend=cfg.cudnn_backend,
         use_wandb=cfg.use_wandb
     )
 

@@ -147,12 +147,12 @@ def mosaic_to_default_crs(input_files: list[Path], output_path: Path):
                                         DEFAULT_CRS)
     with rasterio.open(output_path, "w", **profile) as dest:
         dest.write(mosaic)
+        rprojected_bounds = dest.bounds
     for f in files:
         f.close()
 
-    return box(*array_bounds(profile["height"],
-                             profile["width"],
-                             profile["transform"]))
+    rprojected_bounds = box(*rprojected_bounds)
+    return rprojected_bounds
 
 
 def reproject_clip_raster(input_tif: Path, output_tif: Path, roi: shapely.geometry) -> None:
@@ -168,7 +168,7 @@ def reproject_clip_raster(input_tif: Path, output_tif: Path, roi: shapely.geomet
                                            src.transform,
                                            src.crs,
                                            DEFAULT_CRS,
-                                           Resampling.bilinear)
+                                           Resampling.cubic)
         else:
             reprojected, profile = src.read(), src.meta
         
@@ -225,24 +225,24 @@ def filter_products(scene_name: str, hyp3: HyP3) -> list[search.ASFProduct]:
 def get_hyp3_rtc(scene_name: str, scratch_dir: Path) -> tuple[Path, Path]:
     hyp3 = HyP3()
     job = filter_products(scene_name, hyp3)
-    if job is None:
-        print(f"No existing job found for {scene_name}. Submitting new job. Rerun script to download..")
-        job = hyp3.submit_rtc_job(scene_name, radiometry='gamma0', resolution=20)
+    # if job is None:
+    #     print(f"No existing job found for {scene_name}. Submitting new job. Rerun script to download..")
+    #     job = hyp3.submit_rtc_job(scene_name, radiometry='gamma0', resolution=20)
         
-    if not job.succeeded():
-        print(f"Waiting for job {job.id} for {scene_name} to complete...")
-        hyp3.watch(job, timeout=14400)
+    # if not job.succeeded():
+    #     print(f"Waiting for job {job.id} for {scene_name} to complete...")
+    #     hyp3.watch(job, timeout=14400)
 
-    while 'files' not in job.to_dict().keys():
-        print("Waiting for job to send file link should take less than a minute...")
-        time.sleep(10)
+    # while 'files' not in job.to_dict().keys():
+    #     print("Waiting for job to send file link should take less than a minute...")
+    #     time.sleep(10)
 
     output_path = scratch_dir / job.to_dict()['files'][0]['filename']
     output_dir = output_path.with_suffix('')
     output_zip = output_path.with_suffix('.zip')
-    if not output_dir.exists():
-        job.download_files(location=scratch_dir)
-        extract_zipped_product(output_zip)
+    # if not output_dir.exists():
+    #     job.download_files(location=scratch_dir)
+    #     extract_zipped_product(output_zip)
     vv_file = list(output_dir.glob('*_VV.tif'))[0]
     vh_file = list(output_dir.glob('*_VH.tif'))[0]
     return vv_file, vh_file
@@ -290,7 +290,8 @@ def process_group_radar(roi: shapely.geometry.Polygon,
 
 
 
-def resample_to_mod_res(out_dir: Path, hr_label_path: Path, mod_res_path: Path):        
+def resample_to_mod_res(out_dir: Path, hr_label_path: Path, mod_res_path: Path, geometries: gpd.GeoSeries):
+    no_data = -1
     with rasterio.open(mod_res_path) as mod_res:
         mod_transform = mod_res.transform
         mod_crs = mod_res.crs
@@ -299,16 +300,24 @@ def resample_to_mod_res(out_dir: Path, hr_label_path: Path, mod_res_path: Path):
 
     with rasterio.open(hr_label_path) as high_res:
         high_res_data = high_res.read()
-        dst_array = np.zeros((high_res.count, mod_height, mod_width), dtype=high_res_data.dtype)
+        high_res_data, high_res_transform = mask(
+                    dataset=high_res,
+                    shapes=geometries,
+                    nodata=no_data,
+                    crop=False,
+                )
+        dst_array = np.full((high_res.count, mod_height, mod_width), fill_value=no_data, dtype=np.int8)
 
         # NOTE: two reprojections took place to get aoi then to get to moderate resolution this will introduce some subtle errors
         reproject(
-            source=high_res_data,
+            source=high_res_data.astype(np.int8),
             destination=dst_array,
-            src_transform=high_res.transform,
+            src_transform=high_res_transform,
             src_crs=high_res.crs,
+            src_nodata=no_data,
             dst_transform=mod_transform,
             dst_crs=mod_crs,
+            dst_nodata=no_data,
             resampling=Resampling.nearest
         )
 
@@ -317,7 +326,8 @@ def resample_to_mod_res(out_dir: Path, hr_label_path: Path, mod_res_path: Path):
             'height': mod_height,
             'width': mod_width,
             'transform': mod_transform,
-            'crs': mod_crs
+            'crs': mod_crs,
+            'dtype': np.int8
         })
 
     with rasterio.open(out_dir / hr_label_path.name, 'w', **profile) as dst:
@@ -338,19 +348,18 @@ def process_group(event: str,
     # NOTE: might be useful to rename the group based on location but I am lazy.
     gdf = get_geotiff_bounds_as_gdf(group, group_num, event, DEFAULT_CRS)
 
-    vv_path = radar_dir / "before" /f"{event}_group-{group_num}_VV.tif"
+    vv_before_path = radar_dir / "before" /f"{event}_group-{group_num}_VV.tif"
     hr_label_path = hr_label_dir / f"{event}_group-{group_num}.tif"
-    if not vv_path.exists():
-        roi = mosaic_to_default_crs(group, hr_label_path)
-        if len(dates) == 1:
-            start_date = dates[0]
-            end_date = start_date + datetime.timedelta(days=1)
-        elif len(dates) == 2:
-            start_date, end_date = dates
-        else:
-            raise ValueError(f"Invalid date format for event {event}: {dates}")
+    roi = mosaic_to_default_crs(group, hr_label_path)
+    if len(dates) == 1:
+        start_date = dates[0]
+        end_date = start_date + datetime.timedelta(days=1)
+    elif len(dates) == 2:
+        start_date, end_date = dates
+    else:
+        raise ValueError(f"Invalid date format for event {event}: {dates}")
     process_group_radar(roi, event, group_num, start_date, end_date, radar_dir, scratch_dir=scratch_dir)
-    resample_to_mod_res(label_dir, hr_label_path, vv_path)
+    resample_to_mod_res(label_dir, hr_label_path, vv_before_path, gdf.geometry)
         
     return gdf
 
@@ -433,7 +442,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_workers",
         type=int,
-        default=4
+        default=4,
+        help="Max workers to do parallel processings. Defaults to 4 workers but should be noted that merging of the many tifs opens many files which may cause some i/o issues."
     )
     args = parser.parse_args()
     main(Path(args.search_dir), Path(args.output_dir), args.date_path, Path(args.scratch_dir), args.max_workers)

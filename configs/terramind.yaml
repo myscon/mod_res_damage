@@ -18,7 +18,7 @@ dataset:
 
 trainer:
   _target_: mod_res_damage.trainers.Trainer
-  n_epochs: 1024
+  n_epochs: 1014
   ckpt_interval: 128
   eval_interval: 32
   log_interval: 1
@@ -33,11 +33,12 @@ optimizer:
 
 lr_scheduler:
   _target_: torch.optim.lr_scheduler.CosineAnnealingLR
-  T_max: 128
+  T_max: 1024
   last_epoch: -1
 
 criterion:
   _target_: torch.nn.CrossEntropyLoss
+  reduction: 'none'
 
 activation:
   _target_: torch.nn.Softmax
@@ -45,18 +46,18 @@ activation:
 
 evaluator:
   _target_: mod_res_damage.evaluators.SegEvaluator
-  inference_mode: sliding
-  inference_batch: 16
-  num_monte_carlo: 128
+  inference_mode: random
+  inference_batch: 20
+  num_monte_carlo: 256
   save_probs: true
   
-use_wandb: true
+use_wandb: false
 num_workers: 2
 use_final_ckpt: true
 find_unused_parameters: false
 pin_memory: true
 persistent_workers: false
 
-train_batch_size: 16
+train_batch_size: 20
 test_batch_size: 1
 

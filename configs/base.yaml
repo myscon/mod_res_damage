@@ -11,3 +11,4 @@ find_unused_parameters: false
 pin_memory: false
 persistent_workers: false
 distributed: false
+cudnn_backend: false
