@@ -91,15 +91,6 @@ def entropy(prob):
 
 
 def mutual_information(mc_preds):
-    """
-    Compute the difference between the entropy of the mean of the
-    predictive distribution and the mean of the entropy.
-    """
-    mutual_info = entropy(np.mean(mc_preds, axis=0)) - np.mean(entropy(mc_preds), axis=0)
-    return mutual_info
-
-
-def mutual_information(mc_preds):
     # mc_preds shape: (MC, B, C, H, W)
     mean_probs = np.mean(mc_preds, axis=0)              # shape (B, C, H, W)
     entropy_mean = entropy(mean_probs)                  # shape (B, H, W)

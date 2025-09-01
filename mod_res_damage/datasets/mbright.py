@@ -30,7 +30,6 @@ class ModifiedBright(Dataset):
         cache_arrays: bool = True,
         augment: int | None = None,
         holdout: list[str] | None = ["ukraine-conflict"],
-        train_group_0_only: bool = False,
         threshold: bool = False,
     ):
         super().__init__()
@@ -40,7 +39,6 @@ class ModifiedBright(Dataset):
         self.cache_arrays = cache_arrays
         self.augment = augment
         self.holdout = holdout
-        self.train_group_0_only = train_group_0_only
         self.threshold = threshold
 
         self.root_path = Path(root_path)
@@ -167,6 +165,7 @@ class ModifiedBright(Dataset):
         counts = torch.tensor(list(self.label_counts[self.classes].sum()), dtype=torch.float)
         self.class_weights = 1.0 / (counts + 1e-6)
         self.class_weights = self.class_weights / self.class_weights.sum()
+        self.class_weights = self.class_weights / self.class_weights.max()
         
     def _cache_arrays(self):
         self.target_list = []
