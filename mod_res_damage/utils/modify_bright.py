@@ -225,24 +225,24 @@ def filter_products(scene_name: str, hyp3: HyP3) -> list[search.ASFProduct]:
 def get_hyp3_rtc(scene_name: str, scratch_dir: Path) -> tuple[Path, Path]:
     hyp3 = HyP3()
     job = filter_products(scene_name, hyp3)
-    # if job is None:
-    #     print(f"No existing job found for {scene_name}. Submitting new job. Rerun script to download..")
-    #     job = hyp3.submit_rtc_job(scene_name, radiometry='gamma0', resolution=20)
+    if job is None:
+        print(f"No existing job found for {scene_name}. Submitting new job. Rerun script to download..")
+        job = hyp3.submit_rtc_job(scene_name, radiometry='gamma0', resolution=20)
         
-    # if not job.succeeded():
-    #     print(f"Waiting for job {job.id} for {scene_name} to complete...")
-    #     hyp3.watch(job, timeout=14400)
+    if not job.succeeded():
+        print(f"Waiting for job {job.id} for {scene_name} to complete...")
+        hyp3.watch(job, timeout=14400)
 
-    # while 'files' not in job.to_dict().keys():
-    #     print("Waiting for job to send file link should take less than a minute...")
-    #     time.sleep(10)
+    while 'files' not in job.to_dict().keys():
+        print("Waiting for job to send file link should take less than a minute...")
+        time.sleep(10)
 
     output_path = scratch_dir / job.to_dict()['files'][0]['filename']
     output_dir = output_path.with_suffix('')
     output_zip = output_path.with_suffix('.zip')
-    # if not output_dir.exists():
-    #     job.download_files(location=scratch_dir)
-    #     extract_zipped_product(output_zip)
+    if not output_dir.exists():
+        job.download_files(location=scratch_dir)
+        extract_zipped_product(output_zip)
     vv_file = list(output_dir.glob('*_VV.tif'))[0]
     vh_file = list(output_dir.glob('*_VH.tif'))[0]
     return vv_file, vh_file
@@ -274,14 +274,14 @@ def process_group_radar(roi: shapely.geometry.Polygon,
             processingLevel=constants.PRODUCT_TYPE.SLC,
         )
         if len(search_results) == 0:
-            print(key, roi, date_start, date_end)
             raise ValueError(f'No products found for {event} chip {roi} ({search_roi}) between {date_start} {date_end}')
         
         product = sorted(list(search_results), key=lambda x: sort_products(x, search_roi))[0]
         scene_name = product.properties['sceneName']
         
         # NOTE: Job submission would probably work much better async but eh
-        vv_file, vh_file = get_hyp3_rtc(scene_name, scratch_dir)
+        if not vv_path.exists() or not vh_path.exists():
+            vv_file, vh_file = get_hyp3_rtc(scene_name, scratch_dir)
         date_end = date_end.strftime("%Y-%m-%d")
         date_start = date_start.strftime("%Y-%m-%d")
         
@@ -350,6 +350,7 @@ def process_group(event: str,
 
     vv_before_path = radar_dir / "before" /f"{event}_group-{group_num}_VV.tif"
     hr_label_path = hr_label_dir / f"{event}_group-{group_num}.tif"
+
     roi = mosaic_to_default_crs(group, hr_label_path)
     if len(dates) == 1:
         start_date = dates[0]

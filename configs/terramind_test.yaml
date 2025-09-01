@@ -13,14 +13,14 @@ dataset:
   root_path: ${hydra:runtime.cwd}/data/mbright
   input_size: 224
   cache_arrays: true
-  augment: 64
-  holdout: ???
+  augment: 8
+  holdout: [ukraine-conflict]
 
 trainer:
   _target_: mod_res_damage.trainers.Trainer
-  n_epochs: 256
-  ckpt_interval: 32
-  eval_interval: 8
+  n_epochs: 1
+  ckpt_interval: 1
+  eval_interval: 1
   log_interval: 1
   best_metric_key: 'mIoU'
   precision: fp32
@@ -33,7 +33,7 @@ optimizer:
 
 lr_scheduler:
   _target_: torch.optim.lr_scheduler.CosineAnnealingLR
-  T_max: 32768
+  T_max: 1024
   last_epoch: -1
 
 criterion:
@@ -48,11 +48,11 @@ evaluator:
   _target_: mod_res_damage.evaluators.SegEvaluator
   inference_mode: random
   inference_batch: 20
-  num_monte_carlo: 256
+  num_monte_carlo: 16
   save_probs: true
   
-use_wandb: true
-num_workers: 2
+use_wandb: false
+num_workers: 0
 use_final_ckpt: true
 find_unused_parameters: false
 pin_memory: true

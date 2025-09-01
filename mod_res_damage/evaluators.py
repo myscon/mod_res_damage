@@ -89,7 +89,7 @@ class Evaluator:
         pass
 
     @staticmethod
-    def sliding_inference(model, input, input_size, stride=None, max_batch=None):
+    def sliding_inference(model, input, input_size, max_batch=None, stride=None):
         b, _, _, height, width = input[list(input.keys())[0]].shape
 
         if stride is None:
@@ -99,6 +99,7 @@ class Evaluator:
             h = math.ceil((height - input_size) / stride) + 1
             w = math.ceil((width - input_size) / stride) + 1
 
+        # NOTE: this feels silly but it works I think
         h_grid = torch.linspace(0, height - input_size, h).round().long()
         w_grid = torch.linspace(0, width - input_size, w).round().long()
 
@@ -137,17 +138,16 @@ class Evaluator:
         return merged_pred
     
     @staticmethod
-    def random_inference(model, input, input_size, stride=None, max_batch=None):
+    def random_inference(model, input, input_size, max_batch=None):
         b, _, _, height, width = input[list(input.keys())[0]].shape
+        
+        stride = np.random.randint(input_size // 2, input_size)
+        _h_start = np.random.randint(input_size // 2, input_size)
+        _w_start = np.random.randint(input_size // 2, input_size)
 
-        if stride is None:
-            stride = np.random.randint(input_size // 2, input_size)
-
-        h = int(math.ceil((height + stride) / stride))
-        w = int(math.ceil((width + stride) / stride))
-
-        h_grid = torch.arange(-stride, h + stride, step=stride)
-        w_grid = torch.arange(-stride, w + stride, step=stride)
+        # NOTE: much better than the sliding inference...
+        h_grid = torch.arange(-_h_start, height, step=stride)
+        w_grid = torch.arange(-_w_start, width, step=stride)
 
         num_crops_per_input = len(h_grid) * len(w_grid)
 
@@ -161,8 +161,8 @@ class Evaluator:
 
                     h0, h1 = max(h_start, 0), min(h_end, height)
                     w0, w1 = max(w_start, 0), min(w_end, width)
+                    
                     crop = v[:, :, :, h0:h1, w0:w1]
-
                     pad_top = 0 if h_start >= 0 else -h_start
                     pad_left = 0 if w_start >= 0 else -w_start
                     pad_bottom = max(h_end - height, 0)
@@ -171,11 +171,13 @@ class Evaluator:
                         # NOTE: for  the love of everthing F.pad from function is different from torchvision
                         crop = F.pad(crop, (pad_left, pad_right, pad_top, pad_bottom))
                     input_crops.append(crop)
+                    
             input_cropped[k] = torch.cat(input_crops, dim=0)
 
         pred = []
         max_batch = max_batch if max_batch is not None else b * num_crops_per_input
         batch_num = int(math.ceil(b * num_crops_per_input / max_batch))
+
         for i in range(batch_num):
             input_ = {k: v[max_batch * i: min(max_batch * (i + 1), b * num_crops_per_input)]
                     for k, v in input_cropped.items()}
@@ -198,6 +200,7 @@ class Evaluator:
 
                 ph0 = h0 - h_start
                 pw0 = w0 - w_start
+                
                 ph1 = input_size - (h_end - h1)
                 pw1 = input_size - (w_end - w1)
 
@@ -269,7 +272,8 @@ class SegEvaluator(Evaluator):
             else:
                 logits = self._inference(model, input)
                 probs = self.activation(logits) 
-            loss.append(compute_loss(self.criterion, logits, target, no_data))
+            batch_loss = compute_loss(self.criterion, logits, target, no_data)
+            loss.append(batch_loss)
             
             if self.save_probs:
                 self._save_probs(probs, data, model_name)
@@ -308,9 +312,9 @@ class SegEvaluator(Evaluator):
     
     def _inference(self, model, input):
         if self.inference_mode == "sliding":
-            logits = self.sliding_inference(model, input, self.input_size, stride=self.sliding_stride, max_batch=self.inference_batch)
+            logits = self.sliding_inference(model, input, self.input_size, max_batch=self.inference_batch, stride=self.sliding_stride)
         elif self.inference_mode == "random":
-            logits = self.random_inference(model, input, self.input_size, stride=self.sliding_stride, max_batch=self.inference_batch)
+            logits = self.random_inference(model, input, self.input_size, max_batch=self.inference_batch)
         elif self.inference_mode == "whole":
             logits = model(input)
         else:
