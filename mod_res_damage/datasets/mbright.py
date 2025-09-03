@@ -27,6 +27,7 @@ class ModifiedBright(Dataset):
         split: str,
         root_path: str,
         input_size: int,
+        collapse_categories: True,
         cache_arrays: bool = True,
         augment: int | None = None,
         holdout: list[str] | None = ["ukraine-conflict"],
@@ -36,6 +37,7 @@ class ModifiedBright(Dataset):
         self.split = split
         self.root_path = root_path
         self.input_size = input_size
+        self.collapse_categories = collapse_categories
         self.cache_arrays = cache_arrays
         self.augment = augment
         self.holdout = holdout
@@ -178,6 +180,9 @@ class ModifiedBright(Dataset):
             group = int(m['group'])
             with rasterio.open(tif) as tsrc:
                 arr = tsrc.read()
+                if self.collapse_categories:
+                    arr = np.where(arr >= 2, 2, arr)
+                
                 no_data = torch.tensor(np.where(arr == -1, 0.0, 1.0))
                 self.no_data_list.append(no_data)
                 

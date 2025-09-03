@@ -24,13 +24,16 @@ from shapely.ops import transform
 from sklearn.cluster import DBSCAN
 from typing import Tuple
 
+# NOTE: annoying timeout errors when calling geo_search
+search.constants.INTERNAL.CMR_TIMEOUT = 60
 
-DEFAULT_CRS = "EPSG:3857"
+CLUSTER_CRS = "EPSG:3857"
+DEFAULT_CRS = "EPSG:4326"
 SEARCH_CRS = "EPSG:4326"
 
 
 def get_centroid_meters(src: rasterio.io.DatasetReader) -> tuple:
-    transformer = Transformer.from_crs(src.crs, DEFAULT_CRS, always_xy=True)
+    transformer = Transformer.from_crs(src.crs, CLUSTER_CRS, always_xy=True)
     lon = (src.bounds.left + src.bounds.right) / 2
     lat = (src.bounds.top + src.bounds.bottom) / 2
     x, y = transformer.transform(lon, lat)
@@ -60,7 +63,7 @@ def get_geotiff_bounds_as_gdf(files: list[Path], group: int, event: str, dst_crs
     return gdf
 
 
-def cluster_rasters_by_proximity(files: list[Path], distance_m: int = 10_000) -> list:
+def cluster_rasters_by_proximity(files: list[Path], distance_m: int = 8192) -> list:
     centroids = []
     valid_files = []
 
@@ -78,7 +81,7 @@ def cluster_rasters_by_proximity(files: list[Path], distance_m: int = 10_000) ->
     coords = np.array(centroids)
     
     # NOTE: turns out all the groups are about 4km apart and really only affects the turkiye earthquake 
-    db = DBSCAN(eps=distance_m, min_samples=1, metric='euclidean')
+    db = DBSCAN(eps=distance_m, min_samples=2, metric='euclidean')
     labels = db.fit_predict(coords)
 
     groups = {}
@@ -211,7 +214,7 @@ def filter_products(scene_name: str, hyp3: HyP3) -> list[search.ASFProduct]:
     jobs = [j for j in hyp3.find_jobs(job_type='RTC_GAMMA') if not j.failed() and not j.expired()]
     jobs = [j for j in jobs if j.job_parameters['granules'] == [scene_name]]
     jobs = [j for j in jobs if j.job_parameters['radiometry'] == 'gamma0']
-    jobs = [j for j in jobs if j.job_parameters['resolution'] == 20]
+    jobs = [j for j in jobs if j.job_parameters['resolution'] == 10]
     
     if len(jobs) == 1:
         job = jobs[0]
@@ -226,27 +229,28 @@ def get_hyp3_rtc(scene_name: str, scratch_dir: Path) -> tuple[Path, Path]:
     hyp3 = HyP3()
     job = filter_products(scene_name, hyp3)
     if job is None:
-        print(f"No existing job found for {scene_name}. Submitting new job. Rerun script to download..")
-        job = hyp3.submit_rtc_job(scene_name, radiometry='gamma0', resolution=20)
+        print(f"\nNo existing job found for {scene_name}. Submitting new job.")
+        job = hyp3.submit_rtc_job(scene_name, radiometry='gamma0', resolution=10)
         
     if not job.succeeded():
-        print(f"Waiting for job {job.id} for {scene_name} to complete...")
+        print(f"\nWaiting for job\n{job}\n{scene_name} to complete...")
         hyp3.watch(job, timeout=14400)
-
-    while 'files' not in job.to_dict().keys():
-        print("Waiting for job to send file link should take less than a minute...")
-        time.sleep(10)
+        time.sleep(5)
 
     output_path = scratch_dir / job.to_dict()['files'][0]['filename']
     output_dir = output_path.with_suffix('')
     output_zip = output_path.with_suffix('.zip')
+
     if not output_dir.exists():
+        print(f"\nDownloading files at {output_dir}")
         job.download_files(location=scratch_dir)
         extract_zipped_product(output_zip)
+    else:
+        print(f"\n{output_dir} already exists. Skipping") 
     vv_file = list(output_dir.glob('*_VV.tif'))[0]
     vh_file = list(output_dir.glob('*_VH.tif'))[0]
     return vv_file, vh_file
-    
+
 
 def process_group_radar(roi: shapely.geometry.Polygon, 
                         event: str, 
@@ -264,29 +268,30 @@ def process_group_radar(roi: shapely.geometry.Polygon,
     for key, (date_start, date_end) in date_ranges.items():
         vv_path = output_dir / key / f"{event}_group-{group}_VV.tif"
         vh_path = output_dir / key / f"{event}_group-{group}_VH.tif"
-        search_results = search.geo_search(
-            intersectsWith=search_roi.wkt,
-            start=date_start,
-            end=date_end,
-            beamMode=constants.BEAMMODE.IW,
-            polarization=constants.POLARIZATION.VV_VH,
-            platform=constants.PLATFORM.SENTINEL1,
-            processingLevel=constants.PRODUCT_TYPE.SLC,
-        )
-        if len(search_results) == 0:
-            raise ValueError(f'No products found for {event} chip {roi} ({search_roi}) between {date_start} {date_end}')
-        
-        product = sorted(list(search_results), key=lambda x: sort_products(x, search_roi))[0]
-        scene_name = product.properties['sceneName']
         
         # NOTE: Job submission would probably work much better async but eh
         if not vv_path.exists() or not vh_path.exists():
+            search_results = search.geo_search(
+                intersectsWith=search_roi.wkt,
+                start=date_start,
+                end=date_end,
+                beamMode=constants.BEAMMODE.IW,
+                polarization=constants.POLARIZATION.VV_VH,
+                platform=constants.PLATFORM.SENTINEL1,
+                processingLevel=constants.PRODUCT_TYPE.SLC,
+            )
+            if len(search_results) == 0:
+                raise ValueError(f'No products found for {event} chip {roi} ({search_roi}) between {date_start} {date_end}')
+            
+            product = sorted(list(search_results), key=lambda x: sort_products(x, search_roi))[0]
+            scene_name = product.properties['sceneName']
+            
             vv_file, vh_file = get_hyp3_rtc(scene_name, scratch_dir)
-        date_end = date_end.strftime("%Y-%m-%d")
-        date_start = date_start.strftime("%Y-%m-%d")
-        
-        reproject_clip_raster(vv_file, vv_path, roi)
-        reproject_clip_raster(vh_file, vh_path, roi)
+            date_end = date_end.strftime("%Y-%m-%d")
+            date_start = date_start.strftime("%Y-%m-%d")
+            
+            reproject_clip_raster(vv_file, vv_path, roi)
+            reproject_clip_raster(vh_file, vh_path, roi)
 
 
 
@@ -342,7 +347,7 @@ def process_group(event: str,
                   label_dir: Path,
                   radar_dir: Path,
                   scratch_dir: Path):
-    print(f"handing {event} group {group_num} with {len(group)} items")
+    print(f"\nhanding {event} group {group_num} with {len(group)} items")
     dates = [datetime.datetime.strptime(d, "%Y-%m-%d") for d in dates]
     
     # NOTE: might be useful to rename the group based on location but I am lazy.
@@ -350,8 +355,8 @@ def process_group(event: str,
 
     vv_before_path = radar_dir / "before" /f"{event}_group-{group_num}_VV.tif"
     hr_label_path = hr_label_dir / f"{event}_group-{group_num}.tif"
-
     roi = mosaic_to_default_crs(group, hr_label_path)
+
     if len(dates) == 1:
         start_date = dates[0]
         end_date = start_date + datetime.timedelta(days=1)
@@ -363,6 +368,8 @@ def process_group(event: str,
     resample_to_mod_res(label_dir, hr_label_path, vv_before_path, gdf.geometry)
         
     return gdf
+
+
 
 
 def main(search_dir, output_dir, date_path, scratch_dir, max_workers):
@@ -378,8 +385,7 @@ def main(search_dir, output_dir, date_path, scratch_dir, max_workers):
     tasks = []
     gdfs = []
 
-    if max_workers != 0:
-        max_workers = None if max_workers < 0 else max_workers
+    if max_workers > 0:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for event, dates in event_dates.items():
                 matched_files = list(search_dir.glob(f"*{event}*"))
@@ -389,8 +395,7 @@ def main(search_dir, output_dir, date_path, scratch_dir, max_workers):
                         tasks.append(
                             executor.submit(
                                 process_group,
-                                event, dates, i, group,
-                                hr_label_dir, label_dir, radar_dir, scratch_dir
+                                event, dates, i, group, hr_label_dir, label_dir, radar_dir, scratch_dir
                             )
                         )
 
@@ -400,7 +405,7 @@ def main(search_dir, output_dir, date_path, scratch_dir, max_workers):
                     if result is not None:
                         gdfs.append(result)
                 except Exception as e:
-                    print(f"Error in task: {e}")
+                    print(f"\nError in task: {e}")
     else:
         for event, dates in event_dates.items():
             matched_files = list(search_dir.glob(f"*{event}*"))
@@ -443,7 +448,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_workers",
         type=int,
-        default=4,
+        default=-1,
         help="Max workers to do parallel processings. Defaults to 4 workers but should be noted that merging of the many tifs opens many files which may cause some i/o issues."
     )
     args = parser.parse_args()

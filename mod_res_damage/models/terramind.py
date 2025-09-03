@@ -14,7 +14,7 @@ class TerraMindEncoder(nn.Module):
                  pretrained: bool = True,
                  finetune: bool = False,
                  modalities: list[str] = ['S1RTC'],
-                 output_layers: list[str] = [3, 5, 7, 11]):
+                 output_layers: list[str] = [5, 7, 9, 11]):
         super().__init__()
         self.pretrained = pretrained
         self.finetune = finetune
