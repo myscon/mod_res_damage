@@ -20,14 +20,14 @@ GSD = 10
 
 class ModifiedBright(Dataset):
     classes = ['background', 'intact', 'damaged', 'destroyed']
-    num_classes = len(classes)
+    collapsed_classes = ['background', 'intact', 'damaged']
 
     def __init__(
         self,
         split: str,
         root_path: str,
         input_size: int,
-        collapse_categories: True,
+        collapse_classes: True,
         cache_arrays: bool = True,
         augment: int | None = None,
         holdout: list[str] | None = ["ukraine-conflict"],
@@ -37,7 +37,7 @@ class ModifiedBright(Dataset):
         self.split = split
         self.root_path = root_path
         self.input_size = input_size
-        self.collapse_categories = collapse_categories
+        self.collapse_classes = collapse_classes
         self.cache_arrays = cache_arrays
         self.augment = augment
         self.holdout = holdout
@@ -53,6 +53,9 @@ class ModifiedBright(Dataset):
         
         self.tif_list = glob(str(self.mask_dir) + "/*.tif")
         self.re = re.compile(r'^(?P<event>.*?)_group-(?P<group>\d+)\.tif$')
+        if self.collapse_classes:
+            self.classes = self.collapsed_classes
+        self.num_classes = len(self.classes)
         
         self._apply_holdout()
         self._init_stats()
@@ -90,7 +93,7 @@ class ModifiedBright(Dataset):
                 angle = random.choice([90, 180, 270])
                 sar = F.rotate(sar, angle)
                 target = F.rotate(target, angle)
-                no_data = F.vflip(no_data)
+                no_data = F.rotate(no_data, angle)
                 
         if self.input_size is not None:
             if sar.shape[-1] < self.input_size:
@@ -165,14 +168,21 @@ class ModifiedBright(Dataset):
         
     def _init_class_weights(self):
         counts = torch.tensor(list(self.label_counts[self.classes].sum()), dtype=torch.float)
+        if self.collapse_classes:
+            counts = torch.tensor([counts[0],
+                                   counts[1],
+                                   counts[-2:].sum()])
+
         self.class_weights = 1.0 / (counts + 1e-6)
         self.class_weights = self.class_weights / self.class_weights.sum()
         self.class_weights = self.class_weights / self.class_weights.max()
+
         
     def _cache_arrays(self):
         self.target_list = []
         self.input_list = []
         self.no_data_list = []
+        
         for tif in self.tif_list:
             name = Path(tif).name
             m = self.re.match(name)
@@ -180,15 +190,15 @@ class ModifiedBright(Dataset):
             group = int(m['group'])
             with rasterio.open(tif) as tsrc:
                 arr = tsrc.read()
-                if self.collapse_categories:
+                if self.collapse_classes:
                     arr = np.where(arr >= 2, 2, arr)
-                
+
                 no_data = torch.tensor(np.where(arr == -1, 0.0, 1.0))
                 self.no_data_list.append(no_data)
                 
                 target = torch.tensor(arr).long().contiguous()
                 target[target == -1] = 0
-                target = torch.nn.functional.one_hot(target.squeeze(0), num_classes=len(self.classes))
+                target = torch.nn.functional.one_hot(target.squeeze(0), num_classes=self.num_classes)
                 target = target.permute(2, 0, 1).float()
                 self.target_list.append(target)
                 
@@ -281,7 +291,7 @@ class ModifiedBright(Dataset):
         
         target = torch.tensor(target).long()
         target[target == -1] = 0
-        target = torch.nn.functional.one_hot(target.squeeze(0), num_classes=len(self.classes))
+        target = torch.nn.functional.one_hot(target.squeeze(0), num_classes=self.num_classes)
         target = target.permute(2, 0, 1).float()
 
         no_data = torch.tensor(no_data).float()

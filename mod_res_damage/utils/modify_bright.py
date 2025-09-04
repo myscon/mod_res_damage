@@ -89,7 +89,6 @@ def cluster_rasters_by_proximity(files: list[Path], distance_m: int = 8192) -> l
         groups.setdefault(event, []).append(Path(file))
     return list(groups.values())
   
-  
 
 def reproject_in_mem(src_arr: np.ndarray,
                      bounds: Tuple[float, float, float, float],
@@ -127,7 +126,6 @@ def reproject_in_mem(src_arr: np.ndarray,
     return dst_array, profile
 
   
-
 def mosaic_to_default_crs(input_files: list[Path], output_path: Path):
     files = []
     crses = []

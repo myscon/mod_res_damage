@@ -337,7 +337,7 @@ class SegEvaluator(Evaluator):
                 )
             profile.update(
                 dtype=rasterio.float32,
-                count=self.num_classes,
+                count=prob.shape[0],
                 compress="lzw",
                 width=prob.shape[-1],
                 height=prob.shape[-2],
