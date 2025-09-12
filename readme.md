@@ -1,4 +1,4 @@
-# Title mod_res_damage
+# mod_res_damage
 
 ## Introduction
 This repo contains a simple framework for training a NN for moderate resolution damage mapping using SAR. Included is a BNN built on top of the TerraMind encoder as well as monte carlo inference logit. Also included is an example pipeline from ASF ('mod_res_damage/utils/modify_bright.py') to download SAR using their hyp3 API.
