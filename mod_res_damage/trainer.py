@@ -60,7 +60,7 @@ class Trainer:
         }
         self.best_metric = -1
         self.best_metric_comp = operator.gt
-        self.num_classes = self.train_loader.dataset.num_classes
+        self.num_predictands = len(self.train_loader.dataset.predictands)
 
         assert precision in [
             "fp32",
@@ -104,8 +104,8 @@ class Trainer:
 
         end_time = time.time()
         for batch_idx, data in enumerate(self.train_loader):
-            input, target, no_data = data["input"], data["target"], data["no_data"]
-            input = {modality: value.to(self.device) for modality, value in input.items()}
+            inputs, target, no_data = data["inputs"], data["target"], data["no_data"]
+            inputs = {modality: value.to(self.device) for modality, value in inputs.items()}
             target = target.to(self.device)
             no_data = no_data.to(self.device)
 
@@ -114,7 +114,7 @@ class Trainer:
             with torch.autocast(
                 "cuda", enabled=self.enable_mixed_precision, dtype=self.precision
             ):
-                logits = self.model(input)
+                logits = self.model(inputs)
                 loss = compute_loss(self.criterion, logits, target, no_data)
 
             self.optimizer.zero_grad()
@@ -205,19 +205,13 @@ class Trainer:
     ) -> None:
         curr_metric = eval_metrics[self.best_metric_key]
         if isinstance(curr_metric, list):
-            curr_metric = curr_metric[1] if self.num_classes == 1 else np.mean(curr_metric)
+            curr_metric = curr_metric[1] if self.num_predictands == 1 else np.mean(curr_metric)
         if self.best_metric_comp(curr_metric, self.best_metric):
             self.best_metric = curr_metric
             best_ckpt = self.get_checkpoint(epoch)
             self.save_model(
                 epoch, is_best=True, checkpoint=best_ckpt
             )
-
-    @torch.no_grad()
-    def compute_logging_metrics(
-        self, logits: torch.Tensor, target: torch.Tensor
-    ) -> dict[float, list[float]]:
-        raise NotImplementedError
 
     def log(self, batch_idx: int, epoch) -> None:
         """Log the information.

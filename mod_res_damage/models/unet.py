@@ -98,12 +98,12 @@ class OutConv2d(nn.Module):
 
 
 class UNet2D(nn.Module):
-    def __init__(self, n_channels, n_classes, bilinear=False, kernel_size=3, stride=1, padding=1):
+    def __init__(self, n_channels, n_predictands, bilinear=False, kernel_size=3, stride=1, padding=1):
         super().__init__()
         
-        self.num_classes = n_classes
+        self.num_predictands = n_predictands
         self.n_channels = n_channels
-        self.n_classes = n_classes
+        self.n_predictands = n_predictands
         self.bilinear = bilinear
 
         self.inc = DoubleConv2d(n_channels, 64)
@@ -116,7 +116,7 @@ class UNet2D(nn.Module):
         self.up2 = Up2d(512, 256 // factor, bilinear=bilinear)
         self.up3 = Up2d(256, 128 // factor, bilinear=bilinear)
         self.up4 = Up2d(128, 64, bilinear=bilinear)
-        self.outc = OutConv2d(64, n_classes)
+        self.outc = OutConv2d(64, n_predictands)
 
     def forward(self, x):
         x = x["chip"]
@@ -139,7 +139,7 @@ class UNet2D(nn.Module):
 class UNet3D(nn.Module):
     def __init__(self,
                  n_channels,
-                 n_classes,
+                 n_predictands,
                  num_frames=3,
                  bilinear=False,
                  kernel_size=(1,3,3),
@@ -148,9 +148,9 @@ class UNet3D(nn.Module):
                  embed=False):
         super().__init__()
 
-        self.num_classes = n_classes
+        self.num_predictands = n_predictands
         self.n_channels = n_channels
-        self.n_classes = n_classes
+        self.n_predictands = n_predictands
         self.num_frames = num_frames
         self.bilinear = bilinear
         self.embed = embed
@@ -166,7 +166,7 @@ class UNet3D(nn.Module):
         self.up2 = Up3d(512, 256 // factor, bilinear=bilinear)
         self.up3 = Up3d(256, 128 // factor, bilinear=bilinear)
         self.up4 = Up3d(128, 64, bilinear=bilinear)
-        self.outc = OutConv3d(64, n_classes, kernel_size=(num_frames, 1, 1))
+        self.outc = OutConv3d(64, n_predictands, kernel_size=(num_frames, 1, 1))
 
     def forward(self, x):
         x = x["chip"]

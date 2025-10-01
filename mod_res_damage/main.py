@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader, Dataset
 from torch.utils.data.distributed import DistributedSampler
 
 from mod_res_damage.logger import init_logger
-from mod_res_damage.trainers import Trainer
+from mod_res_damage.trainer import Trainer
 from mod_res_damage.utils.utils import (
     fix_seed,
     get_best_model_ckpt_path,
@@ -125,6 +125,8 @@ def main(cfg: DictConfig) -> None:
     )
     if hasattr(train_dataset, 'class_weights'):
         weight = train_dataset.class_weights.to(device)
+    else:
+        weight = None
     criterion = instantiate(cfg.criterion, weight=weight)
     activation = instantiate(cfg.activation)
     optimizer = instantiate(cfg.optimizer, params=model.parameters())
@@ -159,7 +161,7 @@ def main(cfg: DictConfig) -> None:
     )
 
     trainer.train()
-    if cfg.evaluator.save_probs:
+    if cfg.evaluator.save_output:
         holdout = None
     else:
         holdout = cfg.dataset.holdout

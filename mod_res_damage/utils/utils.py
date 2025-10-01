@@ -79,10 +79,11 @@ def get_final_model_ckpt_path(ckpt_dir: str | Path) -> Optional[str]:
 
 def compute_loss(criterion, logits: torch.Tensor, target: torch.Tensor, no_data: torch.Tensor) -> torch.Tensor:
     loss = criterion(logits, target)
+    valid_count = torch.count_nonzero(no_data)
     
-    if no_data.numel():
-        valid_count = no_data.sum()
-        loss = (loss * no_data).sum() / valid_count
+    assert valid_count > 0
+        
+    loss = (loss * no_data).sum() / valid_count
     return loss
 
 

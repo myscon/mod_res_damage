@@ -13,7 +13,7 @@ class TerraMindEncoder(nn.Module):
                  version: int = "v1_base",
                  pretrained: bool = True,
                  finetune: bool = False,
-                 modalities: list[str] = ['S1RTC'],
+                 modalities: list[str] = ['S1GRD'],
                  output_layers: list[str] = [5, 7, 9, 11]):
         super().__init__()
         self.pretrained = pretrained
@@ -58,7 +58,7 @@ class TerramindBayeSiamNet(TerraMindEncoder):
     }
     
     def __init__(self,
-                 num_classes: int,
+                 num_predictands: int,
                  prior_parameters: dict = None,
                  img_size: int = 256,
                  bilinear: bool = True,
@@ -98,17 +98,17 @@ class TerramindBayeSiamNet(TerraMindEncoder):
             self.bayes_dc_layers.append(dc_dnn)
 
         dim = self.embed_dim // (2 ** (len(self.output_layers) - 1))
-        self.final_conv = nn.Conv2d(in_channels=dim, out_channels=num_classes, kernel_size=1)
+        self.final_conv = nn.Conv2d(in_channels=dim, out_channels=num_predictands, kernel_size=1)
         
         self.img_size = img_size
         self.output_layers = self.output_layers
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        input = x['S1RTC']
-        _, _, t, _, _ = input.shape
+        inputs = x['S1GRD']
+        _, _, t, _, _ = inputs.shape
         
-        feat_before = self.forward_encoder({"S1RTC": input[:, : , :t//2].squeeze(2)})
-        feat_after = self.forward_encoder({"S1RTC": input[:, : , t//2: ].squeeze(2)})
+        feat_before = self.forward_encoder({"S1GRD": inputs[:, : , :t//2].squeeze(2)})
+        feat_after = self.forward_encoder({"S1GRD": inputs[:, : , t//2: ].squeeze(2)})
         b, l, d = feat_after[0].shape
         v = math.floor(l ** 0.5)
         
