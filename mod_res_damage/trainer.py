@@ -11,7 +11,7 @@ from torch.optim.lr_scheduler import LRScheduler
 from torch.optim.optimizer import Optimizer
 from torch.utils.data import DataLoader
 
-from mod_res_damage.utils.utils import RunningAverageMeter, compute_loss
+from mod_res_damage.utils.utils import RunningAverageMeter
 
       
 class Trainer:
@@ -82,7 +82,7 @@ class Trainer:
     def train(self) -> None:
         for epoch in range(self.start_epoch, self.n_epochs):
             if epoch % self.eval_interval == 0:
-                metrics, used_time = self.evaluator(self.model, f"epoch {epoch}")
+                metrics, used_time = self.evaluator(self.model, f"epoch-{epoch}")
                 self.training_stats["eval_time"].update(used_time)
                 self.save_best_checkpoint(metrics, epoch)
 
@@ -94,7 +94,7 @@ class Trainer:
             if epoch % self.ckpt_interval == 0 and epoch != self.start_epoch:
                 self.save_model(epoch)
 
-        metrics, used_time = self.evaluator(self.model, f"epoch {epoch}")
+        metrics, used_time = self.evaluator(self.model, f"epoch-{epoch}")
         self.training_stats["eval_time"].update(used_time)
         self.save_best_checkpoint(metrics, self.n_epochs)
         self.save_model(self.n_epochs, is_final=True)
@@ -110,20 +110,17 @@ class Trainer:
             no_data = no_data.to(self.device)
 
             self.training_stats["data_time"].update(time.time() - end_time)
-
             with torch.autocast(
                 "cuda", enabled=self.enable_mixed_precision, dtype=self.precision
             ):
                 logits = self.model(inputs)
-                loss = compute_loss(self.criterion, logits, target, no_data)
-
+                loss = self.criterion(logits, target)[no_data].mean()
             self.optimizer.zero_grad()
 
             if not torch.isfinite(loss):
                 raise FloatingPointError(
                     f"Rank {self.rank} got infinite/NaN loss at batch {batch_idx} of epoch {epoch}!"
                 )
-
             self.scaler.scale(loss).backward()
             self.scaler.step(self.optimizer)
             self.scaler.update()

@@ -12,7 +12,7 @@ from pathlib import Path
 from rasterio.transform import from_bounds
 from torch.utils.data import DataLoader
 
-from mod_res_damage.utils.utils import mutual_information, compute_loss
+from mod_res_damage.utils.utils import mutual_information
 
 
 class Evaluator:
@@ -86,7 +86,7 @@ class Evaluator:
                 model.module.load_state_dict(model_dict)
             else:
                 model.load_state_dict(model_dict)
-
+    
             self.logger.info(f"Loaded {model_name} for evaluation")
         model.eval()
 
@@ -127,27 +127,28 @@ class Evaluator:
             else:
                 logits = self._inference(model, inputs)
                 output = self.activation(logits) 
-            batch_loss = compute_loss(self.criterion, logits, target, no_data)
-            loss.append(batch_loss.mean())
             
             if self.save_output:
                 self._save_output(output, data, model_name)
+            
+            batch_loss = self.criterion(logits, target)[no_data].mean()
+            loss.append(batch_loss)
             
             if self.task == 'segmentation':
                 if output.shape[1] == 1:
                     pred = (output > 0.5).type(torch.int64)
                 else:
                     pred = torch.argmax(output, dim=1, keepdim=True)
+                pred = pred[no_data].view(pred.shape[0], self.num_predictands, -1)
                 count = torch.bincount(
                     (pred * self.num_predictands + target.long()).flatten(), minlength=self.num_predictands ** 2
                 )
                 confusion_matrix += count.view(self.num_predictands, self.num_predictands)
 
-        if self.num_monte_carlo is not None:
-            output_pred_unc = np.concatenate(output_pred_unc, axis=-1)
-            output_model_unc = np.concatenate(output_model_unc, axis=-1)
-            np.save(self.mc_pred_unc_path / f"{model_name}.npy", output_pred_unc)
-            np.save(self.mc_model_unc_path / f"{model_name}.npy", output_model_unc)
+        for i in range(len(self.dataloader)):
+            if self.num_monte_carlo is not None:
+                np.save(self.mc_pred_unc_path / f"{model_name}_{i}.npy", output_pred_unc[i])
+                np.save(self.mc_model_unc_path / f"{model_name}_{i}.npy", output_model_unc[i])
         
         if self.distributed and self.task == 'segmentation':
             torch.distributed.all_reduce(
@@ -157,7 +158,8 @@ class Evaluator:
         if self.task == 'segmentation':
             metrics.update(self.compute_log_seg_metrics(confusion_matrix.cpu()))
         elif self.task == 'regression':
-            metrics.update(self.compute_log_reg_metrics(output, target))
+            B, _, _, _ = output.shape
+            metrics.update(self.compute_log_reg_metrics(output[no_data].view(B,self.num_predictands,-1), target[no_data].view(B,self.num_predictands,-1)))
         else:
             raise ValueError
 
@@ -265,55 +267,45 @@ class Evaluator:
 
     def compute_log_reg_metrics(self, output, target):
         metrics = {}
-
-        # Make sure tensors are float
-        target = target.float()
-        output = output.float()
         error = target - output
         
         # mae
         abs_error = torch.abs(error)
-        metrics['MAE'] = abs_error.mean(dim=(0,-2,-1))
+        metrics['MAE'] = abs_error.mean(dim=(0,2))
         metrics['mMAE'] = abs_error.mean().item()
         mae_str = self.format_metric("MAE", metrics["MAE"], metrics["mMAE"])
         self.logger.info(mae_str)
 
         # mse
         sq_error = error ** 2
-        metrics['MSE'] = sq_error.mean(dim=(0,-2,-1))
+        metrics['MSE'] = sq_error.mean(dim=(0,2))
         metrics['mMSE'] = sq_error.mean().item()
         mse_str = self.format_metric("MSE", metrics["MSE"], metrics["mMSE"])
         self.logger.info(mse_str)
 
         # rmse
         rmse = torch.sqrt(sq_error)
-        metrics['RMSE'] = sq_error.mean(dim=(0,-2,-1))
+        metrics['RMSE'] = sq_error.mean(dim=(0,2))
         metrics['mRMSE'] = rmse.mean().item()
         rmse_str = self.format_metric("RMSE", metrics["RMSE"], metrics["mRMSE"])
         self.logger.info(rmse_str)
 
         # r2
-        mean_y = target.mean()
-        ss_res = sq_error.sum()
-        ss_tot = ((target - mean_y) ** 2).sum()
+        mean_y = target.mean(dim=(0,2)) 
+        ss_res = sq_error.sum(dim=(0,2))
+        ss_tot = ((target - mean_y[None,:,None]) ** 2).sum(dim=(0,2)) 
         r2 = 1 - ss_res / (ss_tot + 1e-6)
-        metrics['R2'] = r2.mean(dim)
-        r2_str = f"R2: {metrics['mR2']:.3f}"
+        metrics['R2'] = r2
+        metrics['mR2'] = r2.mean().item()
+        r2_str = self.format_metric("R2", metrics["R2"], metrics["mR2"])
         self.logger.info(r2_str)
 
         # mape
         mape = torch.abs(error / (target + 1e-6)) * 100
-        metrics['MAPE'] = mape.mean(dim=(0,-2,-1))
+        metrics['MAPE'] = mape.mean(dim=(0,2))
         metrics['mMAPE'] = mape.mean().item()
         mape_str = self.format_metric("MAPE", metrics["MAPE"], metrics["mMAPE"])
         self.logger.info(mape_str)
-
-        # medae
-        medae = torch.median(abs_error)
-        metrics['MedAE'] = medae.mean(dim=(0,-2,-1))
-        metrics['mMedAE'] = medae.item()
-        medae_str = f"Median AE: {metrics['mMedAE']:.3f}"
-        self.logger.info(medae_str)
 
         if self.use_wandb and self.rank == 0:
             wandb_log = {}

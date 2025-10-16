@@ -70,9 +70,13 @@ class TerramindBayeSiamNet(TerraMindEncoder):
         self.bayes_up_layers = nn.ModuleList()
         self.bayes_ij_layers = nn.ModuleList()
         self.bayes_dc_layers = nn.ModuleList()
+        self.dims = []
         for i in range(len(self.output_layers) - 1):
-            dim0 = self.embed_dim // (2 ** i)
-            dim1 = self.embed_dim // (2 ** (i + 1))
+            if i == 0:
+                dim0 = self.embed_dim
+            else:
+                dim0 = self.embed_dim // (2 ** (i + 1))
+            dim1 = self.embed_dim // (2 ** (i + 2))
 
             if bilinear:
                 up_dnn = nn.Sequential(nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
@@ -97,11 +101,11 @@ class TerramindBayeSiamNet(TerraMindEncoder):
             dnn_to_bnn(dc_dnn, self.prior_parameters)
             self.bayes_dc_layers.append(dc_dnn)
 
-        dim = self.embed_dim // (2 ** (len(self.output_layers) - 1))
+        dim = self.embed_dim // (2 ** (len(self.output_layers)))
         self.final_conv = nn.Conv2d(in_channels=dim, out_channels=num_predictands, kernel_size=1)
+        dnn_to_bnn(self.final_conv, self.prior_parameters)
         
         self.img_size = img_size
-        self.output_layers = self.output_layers
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         inputs = x['S1GRD']

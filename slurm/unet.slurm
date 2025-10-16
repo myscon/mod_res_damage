@@ -1,14 +1,14 @@
 #!/bin/bash -l
 
-#SBATCH --job-name=bayes_array
+#SBATCH --job-name=unet_array
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --partition=ceoas-arm
 #SBATCH --nodelist=youmu
 #SBATCH --array=0-14%3
-#SBATCH --output="/ceoas/Vandenhoek_Lab/mod_res_damage/data/slurm_logs/bayesiammtl_parent.log"
-#SBATCH --error="/ceoas/Vandenhoek_Lab/mod_res_damage/data/slurm_logs/bayesiammtl_parent.err"
+#SBATCH --output="/ceoas/Vandenhoek_Lab/mod_res_damage/data/slurm_logs/unet_parent.log"
+#SBATCH --error="/ceoas/Vandenhoek_Lab/mod_res_damage/data/slurm_logs/unet_parent.err"
 
 conda activate sundial
 
@@ -35,9 +35,9 @@ holdout=${holdout_list//[\[\]\"]/}
 export HUGGINGFACE_HUB_CACHE=/ceoas/Vandenhoek_Lab/mod_res_damage/.hub
 
 conda activate sundial & srun \
-  --job-name="bayesiammtl_${holdout}" \
-  --output="/ceoas/Vandenhoek_Lab/mod_res_damage/data/slurm_logs/bayesiammtl_${holdout}.log" \
-  --error="/ceoas/Vandenhoek_Lab/mod_res_damage/data/slurm_logs/bayesiammtl_${holdout}.err" \
+  --job-name="unet_${holdout}" \
+  --output="/ceoas/Vandenhoek_Lab/mod_res_damage/data/slurm_logs/unet_${holdout}.log" \
+  --error="/ceoas/Vandenhoek_Lab/mod_res_damage/data/slurm_logs/unet_${holdout}.err" \
   python mod_res_damage \
-      --config-name=terramind dataset.holdout="$holdout_list" \
-        experiment_name="med_$holdout"
+      --config-name=unet dataset.holdout="$holdout_list" \
+        experiment_name="$holdout"

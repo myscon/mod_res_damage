@@ -39,7 +39,8 @@ def main(cfg: DictConfig) -> None:
         torch.distributed.init_process_group(backend="nccl")
     else:
         os.environ["RANK"] = '0'
-        os.environ["LOCAL_RANK"] = f"{int(os.environ['SLURM_ARRAY_TASK_ID']) % 2}"
+        # os.environ["LOCAL_RANK"] = f"{int(os.environ['SLURM_ARRAY_TASK_ID']) % 2}"
+        os.environ["LOCAL_RANK"] = '0'
         
     rank = int(os.environ["RANK"])
     local_rank = int(os.environ["LOCAL_RANK"])
@@ -56,7 +57,7 @@ def main(cfg: DictConfig) -> None:
         import wandb
         wandb_cfg = OmegaConf.to_container(cfg, resolve=True)
         wandb.init(
-            project="mod_res_damage",
+            project="mod_res_damage_cv",
             name=exp_name,
             dir=exp_dir,
             config=wandb_cfg,
@@ -125,9 +126,9 @@ def main(cfg: DictConfig) -> None:
     )
     if hasattr(train_dataset, 'class_weights'):
         weight = train_dataset.class_weights.to(device)
+        criterion = instantiate(cfg.criterion, weight=weight)
     else:
-        weight = None
-    criterion = instantiate(cfg.criterion, weight=weight)
+        criterion = instantiate(cfg.criterion)
     activation = instantiate(cfg.activation)
     optimizer = instantiate(cfg.optimizer, params=model.parameters())
     lr_scheduler = instantiate(
@@ -192,7 +193,7 @@ def main(cfg: DictConfig) -> None:
         model_ckpt_path = get_final_model_ckpt_path(ckpt_dir)
     else:
         model_ckpt_path = get_best_model_ckpt_path(ckpt_dir)
-    test_evaluator.evaluate(model, "test_model", model_ckpt_path)
+    test_evaluator.evaluate(model, model_ckpt_path)
     
     if cfg.distributed:
         torch.distributed.destroy_process_group()

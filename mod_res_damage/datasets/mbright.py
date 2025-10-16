@@ -29,6 +29,7 @@ class ModifiedBright(Dataset):
         average_time: bool = True,
         augment: int | None = None,
         holdout: list[str] | None = ["ukraine-conflict"],
+        exclude: list[str] | None = ["ukraine-conflict_group-1", "beirut-explosion_group-0"]
     ):
         super().__init__()
         self.split = split
@@ -38,6 +39,7 @@ class ModifiedBright(Dataset):
         self.average_time = average_time
         self.augment = augment
         self.holdout = holdout
+        self.exclude = exclude
 
         self.root_path = Path(root_path)
         self.radar_dir = self.root_path / "gee_s1_exports"
@@ -45,8 +47,8 @@ class ModifiedBright(Dataset):
         
         self.label_stats = pd.read_csv(self.root_path / "label_stats.csv")
         self.radar_stats = pd.read_csv(self.root_path / "radar_stats.csv")
-        
         self.tif_list = glob(str(self.mask_dir) + "/*.tif")
+        
         self.re = re.compile(r'^(?P<event>.*?)_group-(?P<group>\d{1})\.tif$')
         
         self._apply_holdout()
@@ -70,7 +72,6 @@ class ModifiedBright(Dataset):
             sar, target, no_data = self._read_tifs(index)
         
         if self.augment is not None and self.split == "train":
-            no_data = no_data.unsqueeze(0)
             if random.random() < 0.50:
                 sar = F.hflip(sar)
                 target = F.hflip(target)
@@ -84,8 +85,7 @@ class ModifiedBright(Dataset):
                 sar = F.rotate(sar, angle)
                 target = F.rotate(target, angle)
                 no_data = F.rotate(no_data, angle)
-            no_data = no_data.squeeze(0)
-                
+    
         if self.input_size is not None:
             if sar.shape[-1] < self.input_size:
                     sdiff = self.input_size - sar.shape[-1]
@@ -114,15 +114,15 @@ class ModifiedBright(Dataset):
             }
     
     def _apply_holdout(self):
-        if self.holdout is not None:      
+        if self.holdout is not None:
             if self.split == "train":
                 self.tif_list = [l for l in self.tif_list if all([h not in l for h in self.holdout])]
             else:
-                self.tif_list = [l for l in self.tif_list if all([h in l for h in self.holdout])]
+                self.tif_list = [l for l in self.tif_list if any([h in l for h in self.holdout])]
             assert len(self.tif_list) > 0; "Tif list length must be greater than 0. Check holdout str."
-            
-            for h in self.holdout:
-                self.radar_stats = self.radar_stats.loc[self.radar_stats["event"] != h]
+            self.radar_stats = self.radar_stats.loc[~self.radar_stats["event"].isin(self.holdout)]
+        if self.exclude is not None:
+            self.tif_list = [l for l in self.tif_list if all([e not in l for e in self.exclude])]
 
     def _init_stats(self):            
         self.radar_stats['mean'] = self.radar_stats['mean'].apply(lambda x: np.array(ast.literal_eval(x)))
@@ -149,7 +149,6 @@ class ModifiedBright(Dataset):
         self.target_list = []
         self.input_list = []
         self.no_data_list = []
-        self.non_zero_coords = []
         
         for tif in self.tif_list:
             name = Path(tif).name
@@ -185,6 +184,7 @@ class ModifiedBright(Dataset):
             after_arrs = [f.read(window=from_bounds(*bounds, f.transform)) for f in after_files]
             before_sar = torch.tensor(np.stack(before_arrs, axis=1))
             after_sar = torch.tensor(np.stack(after_arrs, axis=1))
+
             if self.average_time:
                 before_sar = (before_sar - self.data_means) / self.data_stdvs
                 before_sar = before_sar.mean(dim=1, keepdims=True)
@@ -194,8 +194,10 @@ class ModifiedBright(Dataset):
             else:
                 sar = torch.concat([before_sar, after_sar], dim=1)
                 sar = (sar - self.data_means) / self.data_stdvs
-            
-            self.input_list.append(sar.to(torch.float))
+            sar = sar.to(torch.float)
+            sar = torch.where(torch.isnan(sar), 0.0, sar)
+
+            self.input_list.append(sar)
             self.target_list.append(torch.tensor(t_arr, dtype=torch.float))
             
             # i could spend time to clean the data but no, let's do it the silly way
@@ -203,12 +205,13 @@ class ModifiedBright(Dataset):
             subset = self._original_chips.loc[(self._original_chips["group"] == group) &
                                               (self._original_chips['event'] == event)]
             subset = subset.to_crs(t_file.crs)
-            no_data = rasterize(
+            no_data = torch.tensor(rasterize(
                 subset.geometry,
                 out_shape=(h, w),
                 transform=win_transform,
                 dtype=np.uint8
-            )   
+            ))
+            no_data = no_data != 0
             self.no_data_list.append(no_data)
             
             [f.close for f in all_files]
@@ -227,7 +230,6 @@ class ModifiedBright(Dataset):
                     original_polygon = unary_union(subset.geometry)
                     self._original_chips.append({"event": event, "group": group, "geometry": original_polygon})
         self._original_chips = gpd.GeoDataFrame(self._original_chips, geometry="geometry").set_crs(original_chips.crs)
-        
     
     def _read_cache(self, index):
         # NOTE: who knows if this even saves time...
@@ -253,6 +255,6 @@ class ModifiedBright(Dataset):
 
             target = target[:, h:he, w:we]
             inputs = inputs[:, :, h:he, w:we]
-            no_data = no_data[:, h:he, w:we]
-        
+            no_data = no_data[h:he, w:we]
+        no_data = no_data.expand(len(self.predictands), no_data.shape[-2], no_data.shape[-1])
         return inputs, target, no_data

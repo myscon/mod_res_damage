@@ -68,3 +68,4 @@ class DoubleConv3d(nn.Module):
 
     def forward(self, x):
         x = self.double_conv(x)
+        return x
